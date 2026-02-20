@@ -7,7 +7,7 @@ import random
 # --- 1. 頁面基礎設定 ---
 st.set_page_config(page_title="Richart AI 終極理財報表", page_icon="⚪", layout="wide")
 
-# 自定義 CSS (極簡質感風，確保 HTML 不會露出)
+# 自定義 CSS (極簡質感風)
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF; }
@@ -23,6 +23,8 @@ st.markdown("""
     .rank-icon { font-size: 1.2rem; margin-bottom: 5px; }
     .rank-cat { color: #333; font-weight: 500; }
     .rank-amt { font-size: 1.6rem; color: #4A90E2; font-weight: bold; margin-top: 5px; }
+    /* 調整多選下拉選單的間距 */
+    .stMultiSelect { margin-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -30,7 +32,7 @@ st.markdown("""
 SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/export?format=csv&gid=0"
 
 def load_rules():
-    # 加入隨機數防止讀取到舊的 Google Sheets 緩存
+    # 加入隨機數防止讀取到 Google Sheets 的舊緩存
     url = f"{SHEET_CSV_URL}&cache_buster={random.randint(1, 99999)}"
     try:
         rules_df = pd.read_csv(url)
@@ -55,15 +57,17 @@ with st.sidebar:
         st.rerun()
     st.markdown(f"[📝 編輯 Google 表格](https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/edit)")
     st.divider()
-    with st.expander("👀 目前生效分類"):
-        st.write(list(st.session_state.category_rules.keys()))
+    if st.button("🗑️ 重設所有修改"):
+        if 'working_df' in st.session_state:
+            del st.session_state.working_df
+            st.rerun()
 
-# --- 4. 主頁面 ---
+# --- 4. 主頁面：檔案上傳 ---
 st.title("帳務分析報表")
 uploaded_file = st.file_uploader("📥 上傳 Richart Excel", type=["xlsx"], label_visibility="collapsed")
 
 if uploaded_file:
-    # 確保資料只在第一次上傳時讀取
+    # 第一次上傳時初始化資料
     if 'working_df' not in st.session_state:
         try:
             df_raw = pd.read_excel(uploaded_file, header=None)
@@ -76,16 +80,16 @@ if uploaded_file:
             df = pd.read_excel(uploaded_file, header=header_idx)
             df.columns = [str(c).strip() for c in df.columns]
             
-            # 找到關鍵欄位（日期、明細、金額）
+            # 定位關鍵欄位
             c_desc = next((c for c in df.columns if "明細" in c), "消費明細")
             c_amt = next((c for c in df.columns if "金額" in c), "金額")
             c_date = next((c for c in df.columns if "日期" in c), "日期")
             
-            # 清洗金額與排除空白
+            # 清理資料
             df[c_amt] = pd.to_numeric(df[c_amt], errors='coerce').fillna(0)
             df = df.dropna(subset=[c_desc])
             
-            # 自動分類函數
+            # 自動分類
             def classify(t):
                 t = str(t).lower()
                 for cat, kws in st.session_state.category_rules.items():
@@ -94,37 +98,63 @@ if uploaded_file:
             
             df['類別'] = df[c_desc].apply(classify)
             
-            # 將 DataFrame 標準化後存入 Session
+            # 儲存到 Session State
             st.session_state.working_df = df[[c_date, c_desc, c_amt, '類別']].rename(
                 columns={c_date: '日期', c_desc: '消費明細', c_amt: '金額'}
-            )
+            ).reset_index(drop=True)
         except Exception as e:
             st.error(f"檔案解析失敗：{e}")
 
-    # --- 核心邏輯：即時連動與呈現 ---
+    # --- 5. 核心功能區：篩選、編輯、呈現 ---
     if 'working_df' in st.session_state:
         
-        # A. 明細管理區 (放在最前面，確保編輯結果能即時傳遞給下方的圖表)
-        st.markdown("### 🔍 明細管理與修正")
+        # A. 明細管理與「類別篩選」
+        st.markdown("### 🔍 明細管理與篩選")
+        
+        # 建立篩選器
+        all_cats = sorted(st.session_state.working_df['類別'].unique())
+        selected_cats = st.multiselect(
+            "📂 選擇要查看的消費類別：",
+            options=all_cats,
+            default=all_cats,
+            placeholder="請選擇分類..."
+        )
+
+        # 根據篩選過濾要顯示的資料
+        mask = st.session_state.working_df['類別'].isin(selected_cats)
+        display_df = st.session_state.working_df[mask]
+
+        # 顯示可編輯表格
+        # 注意：這裡使用編輯器，修改後的資料會存回 st.session_state.working_df
         edited_df = st.data_editor(
-            st.session_state.working_df,
+            display_df,
             column_config={
                 "類別": st.column_config.SelectboxColumn(
                     "分類修正", 
-                    # 關鍵：動態抓取最新的規則 Key 值，解決「餐飲/吃飯」名稱不對應問題
                     options=list(st.session_state.category_rules.keys()) + ["待分類"]
                 ),
-                "金額": st.column_config.NumberColumn("金額", format="$%d")
+                "金額": st.column_config.NumberColumn("金額", format="$%d"),
+                "日期": st.column_config.Column(disabled=True),
+                "消費明細": st.column_config.Column(disabled=True)
             },
             use_container_width=True, 
             hide_index=True, 
-            height=350,
+            height=400,
             key="main_editor"
         )
 
-        # B. 根據 edited_df 即時計算數據
-        # (這裡不需要 iloc，直接用欄位名稱更穩定)
-        summary = edited_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
+        # 重要：將編輯器中「已修改」的內容同步回原始 Session 資料中
+        # 這樣下方的排行榜才會根據「篩選後並修改過」的結果即時變動
+        if st.session_state.main_editor.get("edited_rows"):
+            for row_idx, changes in st.session_state.main_editor["edited_rows"].items():
+                # 獲取過濾後的 DataFrame 中對應的原始索引
+                actual_idx = display_df.index[int(row_idx)]
+                for field, value in changes.items():
+                    st.session_state.working_df.at[actual_idx, field] = value
+            st.rerun()
+
+        # B. 統計計算 (基於「全量資料」以確保排行榜完整)
+        summary = st.session_state.working_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
         total_sum = summary['金額'].sum()
 
         # C. 數據摘要指標
@@ -132,9 +162,9 @@ if uploaded_file:
         m1, m2, m3 = st.columns(3)
         m1.metric("💰 總支出", f"${total_sum:,.0f}")
         m2.metric("🏆 消費大宗", summary.iloc[0]['類別'] if not summary.empty else "-")
-        m3.metric("📋 紀錄筆數", f"{len(edited_df)} 筆")
+        m3.metric("📋 紀錄筆數", f"{len(st.session_state.working_df)} 筆")
 
-        # D. 獎牌排行榜 (全量顯示所有類別)
+        # D. 獎牌排行榜 (全類別顯示)
         st.divider()
         st.markdown("### 🏆 消費排行榜")
         
@@ -145,7 +175,6 @@ if uploaded_file:
                 if i + j < len(summary):
                     row = summary.iloc[i + j]
                     idx = i + j
-                    # 獎牌與序號邏輯
                     icon = "🥇" if idx == 0 else "🥈" if idx == 1 else "🥉" if idx == 2 else f"#{idx+1}"
                     with cols[j]:
                         st.markdown(f"""
@@ -155,7 +184,7 @@ if uploaded_file:
                         </div>
                         """, unsafe_allow_html=True)
 
-        # E. 圓餅圖 (排除佔比太小的視覺干擾)
+        # E. 圓餅圖
         st.divider()
         st.markdown("### 🥧 支出佔比分析")
         fig_pie = px.pie(summary, values='金額', names='類別', hole=0.7, 
@@ -164,5 +193,5 @@ if uploaded_file:
         st.plotly_chart(fig_pie, use_container_width=True)
         
         # F. 匯出按鈕
-        csv_data = edited_df.to_csv(index=False).encode('utf-8-sig')
-        st.download_button("📤 匯出修正後的報表", csv_data, "finance_report.csv", "text/csv")
+        csv_data = st.session_state.working_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button("📤 匯出最終修正報表", csv_data, "finance_report.csv", "text/csv")
