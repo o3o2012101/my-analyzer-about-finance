@@ -2,95 +2,76 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import io
+import time
+import random
 
 # 1. 頁面基礎設定
 st.set_page_config(page_title="極簡帳務分析", page_icon="⚪", layout="wide")
 
-# 自定義 CSS：極簡主義風格
+# 自定義 CSS (極簡風)
 st.markdown("""
     <style>
-    /* 移除背景顏色，回歸純淨白 */
     .stApp { background-color: #FFFFFF; }
-    
-    /* 側邊欄：極簡灰線條 */
-    div[data-testid="stSidebar"] { 
-        background-color: #FAFAFA; 
-        border-right: 1px solid #EEEEEE; 
-    }
-    
-    /* 按鈕：細膩線條感 */
-    .stButton>button { 
-        width: 100%; 
-        border-radius: 4px; 
-        border: 1px solid #E0E0E0;
-        background-color: transparent;
-        color: #444444;
-        transition: 0.2s;
-    }
-    .stButton>button:hover { 
-        border: 1px solid #AF8F6F;
-        color: #AF8F6F;
-    }
-    
-    /* 數據卡片：無陰影、細邊框 */
-    div[data-testid="stMetric"] {
-        background-color: transparent;
-        border-bottom: 2px solid #F5F5F5;
-        border-radius: 0px;
-        padding: 10px 0px;
-    }
-    
-    /* 字體控制 */
+    div[data-testid="stSidebar"] { background-color: #FAFAFA; border-right: 1px solid #EEEEEE; }
+    .stButton>button { width: 100%; border-radius: 4px; border: 1px solid #E0E0E0; background-color: transparent; color: #444444; }
+    div[data-testid="stMetric"] { border-bottom: 2px solid #F5F5F5; padding: 10px 0px; }
     h1, h2, h3 { font-weight: 300 !important; color: #333333; }
-    
-    /* 隱藏裝飾元素 */
-    div[data-testid="stExpander"] { border: none !important; box-shadow: none !important; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 2. 雲端連結設定 ---
+# 這是你的編輯連結
 EDIT_URL = "https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/edit?gid=0#gid=0"
-SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/export?format=csv&gid=0"
-PREVIEW_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRXIjjDF83p13Bln5VMi6olbKMW4VBJri9Dy9jZKjeZqVLx_Ls5Z6DFMPy7EId8bvCjWOQUzUg6LYvX/pubhtml?widget=true&headers=false"
 
-# --- 3. 核心功能：讀取規則 ---
-@st.cache_data(ttl=5)
-def load_rules():
+# --- 3. 強制同步讀取函數 ---
+def load_rules_force():
+    # 這裡加上隨機參數，防止 Google 或 Streamlit 緩存舊資料
+    sheet_url = f"https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/export?format=csv&gid=0&cache_buster={random.randint(1, 100000)}"
     try:
-        rules_df = pd.read_csv(SHEET_CSV_URL)
+        rules_df = pd.read_csv(sheet_url)
+        # 清理欄位空白
         rules_df.columns = [c.strip() for c in rules_df.columns]
         rules_dict = {}
         for _, row in rules_df.iterrows():
             cat = str(row['分類名稱']).strip()
             if cat and cat != 'nan':
+                # 清理關鍵字空白
                 kws = [k.strip().lower() for k in str(row['關鍵字']).split(",") if k.strip() and k != 'nan']
                 rules_dict[cat] = kws
         return rules_dict
-    except:
+    except Exception as e:
+        st.sidebar.error(f"讀取失敗：{e}")
         return {"預設": []}
 
-st.session_state.category_rules = load_rules()
+# 初始化
+if 'category_rules' not in st.session_state:
+    st.session_state.category_rules = load_rules_force()
 
 # --- 4. 側邊欄 ---
 with st.sidebar:
     st.markdown("### ⚙️ 設定")
-    st.markdown(f"[📝 編輯雲端規則]({EDIT_URL})")
+    st.markdown(f"[📝 點我開啟雲端表格]({EDIT_URL})")
     
-    if st.button("🔄 同步規則"):
-        st.cache_data.clear()
-        st.session_state.category_rules = load_rules()
-        st.rerun()
+    if st.button("🔄 強制同步雲端規則"):
+        with st.spinner('同步中...'):
+            # 清除所有緩存並重新讀取
+            st.cache_data.clear()
+            st.session_state.category_rules = load_rules_force()
+            time.sleep(1) # 給系統一點反應時間
+            st.success("同步成功！")
+            st.rerun()
 
     st.divider()
-    st.components.v1.iframe(PREVIEW_URL, height=450, scrolling=True)
+    # 顯示目前抓到的規則，方便檢查
+    with st.expander("👀 查看目前生效規則"):
+        st.write(st.session_state.category_rules)
 
-# --- 5. 主頁面 ---
+# --- 5. 主頁面 (邏輯維持極簡質感) ---
 st.title("帳務分析報表")
 uploaded_file = st.file_uploader("", type=["xlsx"])
 
 if uploaded_file:
     try:
-        # 資料處理 (Richart 格式自動偵測)
         df_raw = pd.read_excel(uploaded_file, header=None)
         header_idx = 0
         for i, row in df_raw.iterrows():
@@ -111,12 +92,14 @@ if uploaded_file:
 
             def classify(t):
                 t = str(t).lower()
+                # 使用 session_state 裡的最新規則
                 for cat, kws in st.session_state.category_rules.items():
                     if any(k in t for k in kws): return cat
                 return "待分類"
+            
             df['類別'] = df[c_desc].apply(classify)
 
-            # --- 核心數據摘要 ---
+            # 數據摘要
             total_sum = df[c_amt].sum()
             summary_df = df.groupby('類別')[c_amt].sum().sort_values(ascending=False).reset_index()
             
@@ -125,26 +108,20 @@ if uploaded_file:
             c2.metric("最大開銷", summary_df.iloc[0]['類別'] if not summary_df.empty else "-")
             c3.metric("紀錄比數", f"{len(df)} 筆")
 
-            # --- 功能區塊 ---
             st.markdown("<br>", unsafe_allow_html=True)
-            t1, t2, t3 = st.tabs(["數據分析", "明細管理", "排名看板"])
+            t1, t2 = st.tabs(["📊 數據圖表", "📋 明細管理"])
 
             with t1:
-                col_a, col_b = st.columns([1, 1])
+                col_a, col_b = st.columns(2)
                 with col_a:
-                    fig_pie = px.pie(summary_df, values=c_amt, names='類別', hole=0.7,
-                                     color_discrete_sequence=px.colors.qualitative.Pastel)
-                    fig_pie.update_layout(showlegend=True, margin=dict(t=0, b=0, l=0, r=0))
+                    fig_pie = px.pie(summary_df, values=c_amt, names='類別', hole=0.7, color_discrete_sequence=px.colors.qualitative.Pastel)
                     st.plotly_chart(fig_pie, use_container_width=True)
                 with col_b:
-                    if c_date:
-                        trend = df.groupby(c_date)[c_amt].sum().reset_index()
-                        fig_line = px.line(trend, x=c_date, y=c_amt, color_discrete_sequence=['#333333'])
-                        fig_line.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
-                        st.plotly_chart(fig_line, use_container_width=True)
+                    fig_rank = px.bar(summary_df, x=c_amt, y='類別', orientation='h', color_discrete_sequence=['#555555'])
+                    fig_rank.update_layout(yaxis={'categoryorder':'total ascending'}, plot_bgcolor='rgba(0,0,0,0)')
+                    st.plotly_chart(fig_rank, use_container_width=True)
 
             with t2:
-                # 明細修正
                 st.data_editor(
                     df[[c_date, c_desc, c_amt, '類別']],
                     column_config={
@@ -153,17 +130,5 @@ if uploaded_file:
                     },
                     use_container_width=True, hide_index=True
                 )
-                
-                csv = df.to_csv(index=False).encode('utf-8-sig')
-                st.download_button("📤 匯出 CSV", csv, "report.csv", "text/csv")
-
-            with t3:
-                # 簡單的橫向條形圖
-                fig_rank = px.bar(summary_df, x=c_amt, y='類別', orientation='h', 
-                                  color_discrete_sequence=['#555555'])
-                fig_rank.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                                      yaxis={'categoryorder':'total ascending'})
-                st.plotly_chart(fig_rank, use_container_width=True)
-
     except Exception as e:
         st.error(f"解析錯誤: {e}")
