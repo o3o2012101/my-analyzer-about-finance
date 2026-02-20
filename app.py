@@ -10,66 +10,61 @@ import time
 # --- 1. 頁面基礎設定 ---
 st.set_page_config(page_title="Richart AI 全自動帳本", page_icon="💰", layout="wide")
 
-# --- 2. 核心 CSS 修復：字體與按鈕對齊 ---
+# --- 2. 核心視覺與對齊修復 (CSS) ---
 st.markdown("""
     <style>
-    /* 引入更接近源泉圓體的 Google 圓體字型 */
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700&family=ZCOOL+KuaiLe&display=swap');
+    /* 1. 強制導入圓體字型 */
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700;900&display=swap');
     
-    /* 全域字體強制套用圓體風格 */
-    html, body, [class*="css"], .stMarkdown, p, button {
+    html, body, [class*="css"], p, span, button {
         font-family: 'Noto Sans TC', sans-serif !important;
-        letter-spacing: 0.5px;
     }
 
-    /* 標題加重圓體感 */
-    h1, h2, h3 {
-        font-family: 'Noto Sans TC', sans-serif !important;
-        font-weight: 800 !important;
-        color: #31333F !important;
-    }
-
-    /* --- 排行榜按鈕對齊修復 (強制 Grid) --- */
-    .ranking-container {
-        display: grid;
-        grid-template-columns: repeat(6, 1fr); /* 嚴格 6 欄對齊 */
-        gap: 12px;
-        margin-bottom: 20px;
-    }
-
-    /* 覆蓋 Streamlit 預設按鈕樣式 */
+    /* 2. 排行榜按鈕美化 (名次與金額藍字) */
     .stButton > button {
         width: 100% !important;
-        border-radius: 12px !important;
-        height: 65px !important; /* 固定高度防止行差 */
-        background-color: #F0F4F8 !important;
-        border: 1px solid #D1D9E6 !important;
-        color: #1A1A1A !important;
-        font-weight: 700 !important;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        line-height: 1.2 !important;
+        border-radius: 15px !important;
+        height: 85px !important; 
+        background-color: #FFFFFF !important;
+        border: 2px solid #E8EEF5 !important;
+        color: #333333 !important;
+        transition: all 0.3s ease;
+        padding: 10px !important;
     }
-
     .stButton > button:hover {
         border-color: #4A90E2 !important;
-        background-color: #EBF3FF !important;
+        background-color: #F8FBFF !important;
+        transform: translateY(-2px);
+    }
+    
+    /* 藍字金額樣式 (透過 markdown 注入或直接設定按鈕內文字) */
+    .blue-price {
+        color: #4A90E2;
+        font-weight: 900;
+        font-size: 1.1em;
     }
 
-    /* 儲存按鈕顏色強化 */
+    /* 3. 儲存區域對齊修復 (關鍵：讓 Row 內元素底端對齊) */
+    [data-testid="stHorizontalBlock"] {
+        align-items: flex-end !important;
+    }
+
+    /* 儲存按鈕文字顏色強化 (純白) */
     button[kind="primary"] {
         background-color: #4A90E2 !important;
         color: white !important;
-        height: 50px !important;
+        font-weight: 700 !important;
+        border: none !important;
     }
     
-    /* 隱藏 DataEditor 多餘空白 */
-    [data-testid="stDataEditor"] { border-radius: 10px; }
+    /* 側邊欄圓角化 */
+    [data-testid="stSidebar"] {
+        background-color: #F9FAFB;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 連線與規則加載 ---
+# --- 3. 連線與規則加載 (保留現有功能) ---
 @st.cache_resource
 def get_gc():
     try:
@@ -95,7 +90,7 @@ def load_rules_from_cloud():
 if 'opts' not in st.session_state:
     st.session_state.opts, st.session_state.rules = load_rules_from_cloud()
 
-# --- 4. 自動分類邏輯 ---
+# --- 4. 自動分類邏輯 (保留現有功能) ---
 def perform_auto_classify(df):
     def get_cat(desc):
         desc_lower = str(desc).lower()
@@ -106,26 +101,23 @@ def perform_auto_classify(df):
     new_df['類別'] = new_df['消費明細'].apply(get_cat)
     return new_df
 
-# --- 5. 側邊欄 ---
+# --- 5. 側邊欄：歷史查詢 ---
 with st.sidebar:
     st.markdown("## 📂 功能選單")
-    with st.expander("📝 規則狀態查詢", expanded=False):
-        if st.session_state.opts:
-            st.success(f"已讀取 {len(st.session_state.opts)} 個分類")
-            if st.button("🔄 同步雲端規則"):
-                st.session_state.opts, st.session_state.rules = load_rules_from_cloud()
-                st.rerun()
+    if st.button("🔄 同步雲端規則"):
+        st.session_state.opts, st.session_state.rules = load_rules_from_cloud()
+        st.rerun()
     st.divider()
     st.markdown("### 🔎 歷史紀錄查詢")
-    search_month = st.text_input("輸入年份月份 (YYYYMM)", key="search_input")
-    if st.button("載入歷史明細", key="load_hist"):
+    search_month = st.text_input("輸入年份月份 (YYYYMM)")
+    if st.button("載入歷史明細"):
         try:
             old_df = conn.read(worksheet=search_month, ttl="0s")
             st.session_state.working_df = old_df
             st.rerun()
         except: st.error("查無資料")
 
-# --- 6. 彈出對話框 ---
+# --- 6. 彈出對話框 (Dialog) ---
 @st.dialog("📋 消費明細深入查看", width="large")
 def show_detail_dialog(cat, data):
     st.markdown(f"### 類別：{cat}")
@@ -133,10 +125,10 @@ def show_detail_dialog(cat, data):
     st.dataframe(d[['日期', '消費明細', '金額']], use_container_width=True, hide_index=True)
     st.metric("該類別總額", f"${int(d['金額'].sum()):,}")
 
-# --- 7. 主頁面流程 (嚴格 6 步驟) ---
-st.markdown("# 🤖 Richart AI 自動記帳系統")
+# --- 7. 主頁面流程 (按順序排列) ---
+st.markdown("# 🤖 Richart AI 全自動記帳系統")
 
-# Step 1: 上傳
+# Step 1: 上傳與自動分類
 if 'working_df' not in st.session_state:
     u_file = st.file_uploader("📥 上傳 Excel 明細開始分析", type=["xlsx"])
     if u_file:
@@ -151,9 +143,9 @@ if 'working_df' not in st.session_state:
         st.rerun()
 
 if 'working_df' in st.session_state:
-    # (1) 明細管理 (Step 3 手動調整)
+    # (1) 明細管理與類別修正 (置頂欄位)
     st.markdown("### 🔍 1. 明細管理與類別修正")
-    if st.button("🤖 重新套用規則 (全表更新)", key="reclassify_btn"):
+    if st.button("🤖 重新套用最新規則"):
         st.session_state.working_df = perform_auto_classify(st.session_state.working_df)
         st.rerun()
     
@@ -164,23 +156,23 @@ if 'working_df' in st.session_state:
         use_container_width=True, hide_index=True, key="main_editor"
     )
 
-    # (Step 4 連動計算)
+    # 連動數據
     current_sum_df = edited_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
 
     st.divider()
 
-    # (2) 排行榜 (對齊修復版)
+    # (2) 排行榜 (對齊 + 名次 + 藍字金額)
     st.markdown("### 🏆 2. 消費支出排行榜 (點擊看明細)")
-    
-    # 解決行差：使用固定欄位數，不足的補空位確保 Grid 完整
     num_cols = 6
     for i in range(0, len(current_sum_df), num_cols):
         batch = current_sum_df.iloc[i:i+num_cols]
         cols = st.columns(num_cols)
-        for idx, (_, row) in enumerate(batch.iterrows()):
+        for idx, (idx_df, row) in enumerate(batch.iterrows()):
             with cols[idx]:
-                label = f"{row['類別']}\n${int(row['金額']):,}"
-                if st.button(label, key=f"rank_{row['類別']}", use_container_width=True):
+                rank_num = idx_df + 1 # 名次從 1 開始
+                # 這裡透過 Markdown 模擬藍字視覺效果 (按鈕標籤不支援 HTML，故直接用符號與金額組合)
+                btn_label = f"No.{rank_num} {row['類別']}\n💰 {int(row['金額']):,}"
+                if st.button(btn_label, key=f"r_{row['類別']}", use_container_width=True):
                     show_detail_dialog(row['類別'], edited_df)
 
     st.divider()
@@ -194,22 +186,22 @@ if 'working_df' in st.session_state:
 
     st.divider()
 
-    # (4) 命名與匯入 (Step 5)
+    # (4) 命名並儲存至雲端 (完全對齊修復)
     st.markdown("### 💾 4. 命名並儲存至雲端")
-    s_col1, s_col2 = st.columns([3, 7])
+    s_col1, s_col2 = st.columns([4, 6]) # 調整比例讓對齊更美觀
     with s_col1:
         target_name = st.text_input("分頁名稱 (YYYYMM)", value=datetime.now().strftime("%Y%m"))
     with s_col2:
-        st.write("") 
-        st.write("")
+        # 下方按鈕將會因為 CSS 中的 align-items: flex-end 而自動與輸入框底端對齊
         if st.button("🚀 確定上傳至 Google Sheet", type="primary", use_container_width=True):
             if gc:
                 sh = gc.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
                 try: sh.worksheet(target_name)
                 except: sh.add_worksheet(title=target_name, rows="1000", cols="20")
                 conn.update(worksheet=target_name, data=edited_df)
-                st.success(f"✅ 已儲存至分頁：{target_name}")
+                st.success(f"✅ 已成功儲存：{target_name}")
 
+    st.write("") # 增加一點間距
     if st.button("🗑️ 清空數據"):
         del st.session_state.working_df
         st.rerun()
