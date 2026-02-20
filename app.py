@@ -1,124 +1,173 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import os
+import io
+import json
 
-st.set_page_config(page_title="個人化帳單分析師", layout="wide")
-st.title("💳 信用卡自動分類分析系統")
+# 頁面設定
+st.set_page_config(page_title="Richart AI 帳單專家", page_icon="💳", layout="wide")
 
-# --- 1. 自動記憶邏輯：使用本地檔案儲存規則 ---
-# 在雲端部署時，這會暫存在伺服器磁碟；若要永久保存，建議連結 Streamlit Secrets
-DB_FILE = "persistent_rules.csv"
+# 套用自定義 CSS 美化
+st.markdown("""
+    <style>
+    .main { background-color: #f8f9fa; }
+    .stButton>button { width: 100%; border-radius: 8px; height: 3em; transition: 0.3s; }
+    .stButton>button:hover { border: 2px solid #ff4b4b; color: #ff4b4b; }
+    div[data-testid="stMetricValue"] { font-size: 28px; color: #ff4b4b; }
+    </style>
+    """, unsafe_allow_html=True)
 
-def load_rules():
-    if os.path.exists(DB_FILE):
-        return pd.read_csv(DB_FILE).set_index('分類名稱')['關鍵字'].to_dict()
-    return {
-        "吃飯": "餐廳, 711, 全家, 優食, 麥當勞, 星巴克",
-        "交通": "優步, 高鐵, 台鐵, 捷運, 中油, taxi",
-        "購物": "蝦皮, coupang, momo, uniqlo",
-        "旅遊開銷": "客路, trip.com, 訂房, 飯店",
-        "基本固定開銷": "netflix, 電信, icloud, apple.com, google"
+st.title("💳 Richart AI 信用卡自動化分析系統")
+st.caption("輕鬆匯入、自動分類、掌握您的每一分開銷")
+
+# --- 1. 分類規則管理 (Session State) ---
+if 'category_rules' not in st.session_state:
+    st.session_state.category_rules = {
+        "吃飯": ["餐廳", "711", "全家", "優食", "麥當勞", "星巴克", "雅室", "牛排"],
+        "交通": ["優步", "uber", "車隊", "高鐵", "台鐵", "捷運", "中油", "taxi"],
+        "購物": ["蝦皮", "coupang", "momo", "uniqlo", "連支"],
+        "旅遊開銷": ["客路", "trip.com", "訂房", "飯店"],
+        "基本固定開銷": ["netflix", "電信", "icloud", "apple.com", "google", "服務費"]
     }
 
-def save_rules(rules_dict):
-    df_rules = pd.DataFrame(list(rules_dict.items()), columns=['分類名稱', '關鍵字'])
-    df_rules.to_csv(DB_FILE, index=False)
-
-# 初始化 Session State
-if 'category_rules' not in st.session_state:
-    st.session_state.category_rules = load_rules()
-
-# --- 2. 左側設定面板：字卡化管理 ---
+# --- 2. 左側設定面板：美化字卡與檔案管理 ---
 with st.sidebar:
-    st.header("⚙️ 智慧分類設定")
-    st.caption("修改後系統會自動記住，下次上傳直接生效。")
+    st.header("⚙️ 系統設定中心")
     
-    # 新增分類功能
-    new_cat = st.text_input("➕ 新增分類名稱")
-    if st.button("確認新增"):
-        if new_cat and new_cat not in st.session_state.category_rules:
-            st.session_state.category_rules[new_cat] = ""
-            save_rules(st.session_state.category_rules)
-            st.rerun()
+    # --- 規則存檔工具列 ---
+    with st.container(border=True):
+        st.subheader("💾 規則存檔")
+        col_save1, col_save2 = st.columns(2)
+        with col_save1:
+            rules_json = json.dumps(st.session_state.category_rules, ensure_ascii=False)
+            st.download_button("📤 匯出備份", rules_json, file_name="my_rules.json", mime="application/json", use_container_width=True)
+        with col_save2:
+            st.button("📥 載入備份", on_click=lambda: st.toast("請將 JSON 檔案拖入下方"), use_container_width=True)
+        
+        uploaded_rules = st.file_uploader("點擊上傳備份檔", type=["json"], label_visibility="collapsed")
+        if uploaded_rules:
+            st.session_state.category_rules = json.load(uploaded_rules)
+            st.success("規則載入成功！")
 
     st.divider()
     
-    # 動態產生字卡
+    # --- 字卡管理 ---
+    st.subheader("📁 消費類別字卡")
+    new_cat = st.text_input("輸入新類別名稱", placeholder="例如：醫美、寵物...")
+    if st.button("✨ 點擊新增分類", type="primary"):
+        if new_cat and new_cat not in st.session_state.category_rules:
+            st.session_state.category_rules[new_cat] = []
+            st.rerun()
+
     for cat in list(st.session_state.category_rules.keys()):
-        with st.expander(f"📁 {cat}", expanded=False):
-            current_kws = st.session_state.category_rules[cat]
-            new_kws = st.text_area(f"關鍵字", value=current_kws, key=f"input_{cat}", help="以逗號隔開")
+        with st.expander(f"📌 {cat}", expanded=False):
+            kw_list = st.session_state.category_rules[cat]
+            new_kws = st.text_area(f"關鍵字 (以英文逗號分開)", value=", ".join(kw_list), key=f"kw_{cat}")
+            st.session_state.category_rules[cat] = [k.strip() for k in new_kws.split(",") if k.strip()]
             
-            # 若有變更，自動儲存
-            if new_kws != current_kws:
-                st.session_state.category_rules[cat] = new_kws
-                save_rules(st.session_state.category_rules)
-            
-            if st.button(f"刪除 {cat}", key=f"del_{cat}"):
+            if st.button(f"🗑️ 刪除該字卡", key=f"del_{cat}"):
                 del st.session_state.category_rules[cat]
-                save_rules(st.session_state.category_rules)
                 st.rerun()
 
-# --- 3. 檔案處理與圖表顯示 ---
-uploaded_file = st.file_uploader("上傳本月信用卡明細 Excel", type=["xlsx"])
+# --- 3. 檔案上傳與核心邏輯 ---
+with st.container(border=True):
+    uploaded_file = st.file_uploader("📤 請在此上傳您的信用卡明細 Excel (Richart 格式)", type=["xlsx"])
 
 if uploaded_file:
-    # (省略重複的偵測標題邏輯，與前版相同...)
-    # ... 原有的偵測 header_idx 程式碼 ...
-    raw_df = pd.read_excel(uploaded_file, header=None)
-    header_idx = 0
-    for i, row in raw_df.iterrows():
-        if "消費明細" in "".join(str(v) for v in row.values):
-            header_idx = i
-            break
-    
-    df = pd.read_excel(uploaded_file, header=header_idx)
-    df.columns = [str(c).strip() for c in df.columns]
-    
-    col_desc = next((c for c in df.columns if "明細" in c), None)
-    col_amt = next((c for c in df.columns if "金額" in c), None)
-    col_date = next((c for c in df.columns if "日期" in c), None)
-
-    if col_desc and col_amt:
-        df[col_amt] = pd.to_numeric(df[col_amt], errors='coerce').fillna(0)
+    try:
+        # 標題偵測邏輯
+        df_temp = pd.read_excel(uploaded_file, header=None)
+        header_idx = 0
+        for i, row in df_temp.iterrows():
+            if "消費明細" in "".join(str(v) for v in row.values):
+                header_idx = i
+                break
         
-        # 自動分類
-        def auto_classify(text):
-            text = str(text).lower()
-            for cat, kws in st.session_state.category_rules.items():
-                keywords = [k.strip().lower() for k in str(kws).split(",") if k.strip()]
-                if any(k in text for k in keywords):
-                    return cat
-            return "待分類"
-
-        df['類別'] = df[col_desc].apply(auto_classify)
-
-        # --- 4. 圓餅圖與直接修改功能 ---
-        st.divider()
-        col_chart, col_table = st.columns([1, 1.5])
+        df = pd.read_excel(uploaded_file, header=header_idx)
+        df.columns = [str(c).strip() for c in df.columns]
         
-        with col_chart:
-            st.subheader("📊 消費支出佔比")
-            summary = df.groupby('類別')[col_amt].sum().reset_index()
-            fig = px.pie(summary[summary[col_amt]>0], values=col_amt, names='類別', hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
+        col_desc = next((c for c in df.columns if "明細" in c), None)
+        col_amt = next((c for c in df.columns if "金額" in c), None)
+        col_date = next((c for c in df.columns if "日期" in c), None)
+
+        if col_desc and col_amt:
+            df[col_amt] = pd.to_numeric(df[col_amt], errors='coerce').fillna(0)
+            df = df.dropna(subset=[col_desc])
+
+            # 分類
+            def auto_classify(text):
+                text = str(text).lower()
+                for cat, keywords in st.session_state.category_rules.items():
+                    if any(k.lower() in text for k in keywords):
+                        return cat
+                return "待分類"
+            df['類別'] = df[col_desc].apply(auto_classify)
+
+            # --- 4. 儀表板視覺化 ---
+            st.divider()
+            col_chart, col_detail = st.columns([1, 1.2])
+
+            with col_chart:
+                st.subheader("📊 消費支出佔比")
+                summary = df.groupby('類別')[col_amt].sum().reset_index()
+                fig = px.pie(summary[summary[col_amt]>0], values=col_amt, names='類別', hole=0.5,
+                             color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig.update_layout(margin=dict(t=0, b=0, l=0, r=0))
+                st.plotly_chart(fig, use_container_width=True)
+
+            with col_detail:
+                st.subheader("🔍 明細管理與快速篩選")
+                target_cat = st.selectbox("🎯 快速篩選類別：", options=["全部項目"] + list(df['類別'].unique()))
+                
+                filtered_df = df if target_cat == "全部項目" else df[df['類別'] == target_cat]
+                cat_total = filtered_df[col_amt].sum()
+                
+                # 美化總計顯示
+                st.metric(label=f"💰 【{target_cat}】小計", value=f"${cat_total:,.0f}")
+                
+                # 互動式表格
+                edited_df = st.data_editor(
+                    filtered_df[[col_date, col_desc, col_amt, '類別']],
+                    column_config={
+                        "類別": st.column_config.SelectboxColumn("分類", options=list(st.session_state.category_rules.keys()) + ["待分類"]),
+                        "消費金額": st.column_config.NumberColumn("金額", format="$%d")
+                    },
+                    use_container_width=True, hide_index=True
+                )
+
+            # --- 5. 消費排名與結算 (新功能區) ---
+            st.divider()
+            st.subheader("🏆 本月消費實力榜")
             
-            if st.button("📥 匯出本月分類結果 Excel"):
+            rank_df = df.groupby('類別')[col_amt].sum().sort_values(ascending=False).reset_index()
+            total_sum = rank_df[col_amt].sum()
+            
+            # 排名卡片
+            rank_cols = st.columns(len(rank_df) if len(rank_df) < 5 else 5)
+            for i, row in rank_df.iterrows():
+                with rank_cols[i % 5]:
+                    st.metric(label=f"Rank {i+1}: {row['類別']}", value=f"${row[col_amt]:,.0f}", 
+                              delta=f"佔 { (row[col_amt]/total_sum*100):.1f}%", delta_color="normal")
+            
+            st.divider()
+            
+            col_sum1, col_sum2 = st.columns([2, 1])
+            with col_sum1:
+                # 橫向排名圖
+                fig_rank = px.bar(rank_df, x=col_amt, y='類別', orientation='h', 
+                                  color='類別', color_discrete_sequence=px.colors.qualitative.Set3)
+                fig_rank.update_layout(showlegend=False, height=300)
+                st.plotly_chart(fig_rank, use_container_width=True)
+            
+            with col_sum2:
+                st.markdown(f"### 🏁 結算報告")
+                st.success(f"本月總支出： **${total_sum:,.0f}**")
+                
+                # 美化的匯出按鈕
                 output = io.BytesIO()
                 df.to_excel(output, index=False)
-                st.download_button("點擊下載", output.getvalue(), "monthly_report.xlsx")
+                st.download_button("📥 匯出 Excel 完整報表", output.getvalue(), "Monthly_Report.xlsx", type="primary")
 
-        with col_table:
-            st.subheader("🔍 明細管理 (直接修改類別)")
-            # 功能：在表格直接改類別，並詢問是否要把這個店家記下來
-            edited_df = st.data_editor(
-                df[[col_date, col_desc, col_amt, '類別']],
-                column_config={
-                    "類別": st.column_config.SelectboxColumn("類別", options=list(st.session_state.category_rules.keys()) + ["待分類"])
-                },
-                use_container_width=True, hide_index=True
-            )
-            
-            # 檢查是否有手動修改，若有，詢問是否要將該關鍵字加入規則
-            # (此處可實作自動學習邏輯：若用戶改了某項，自動把該店名存入關鍵字)
+    except Exception as e:
+        st.error(f"系統偵測到異常: {e}")
+        
