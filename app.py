@@ -89,14 +89,23 @@ if uploaded_file:
         st.markdown("### 🔍 明細管理與修正")
         edited_df = st.data_editor(
             st.session_state.main_df,
-            column_config={
-                "類別": st.column_config.SelectboxColumn("分類修正", options=list(st.session_state.category_rules.keys()) + ["待分類"]),
-                "金額": st.column_config.NumberColumn("金額", format="$%d")
-            },
-            use_container_width=True, hide_index=True, height=350,
-            key="editor"
-        )
-
+           # --- 修改這一段 (大約在 105 行開始) ---
+st.markdown("### 🔍 明細管理與修正")
+edited_df = st.data_editor(
+    st.session_state.working_df,
+    column_config={
+        "類別": st.column_config.SelectboxColumn(
+            "分類修正", 
+            # 關鍵修改：確保選項永遠跟隨雲端規則的最新 Key 值
+            options=list(st.session_state.category_rules.keys()) + ["待分類"]
+        ),
+        "金額": st.column_config.NumberColumn("金額", format="$%d")
+    },
+    use_container_width=True, 
+    hide_index=True, 
+    height=350,
+    key="main_editor"
+)
         # 即時計算最新數據
         summary = edited_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
         total_sum = summary['金額'].sum()
