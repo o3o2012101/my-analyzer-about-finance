@@ -16,26 +16,30 @@ st.markdown("""
     div[data-testid="stMetric"] { border-bottom: 2px solid #F5F5F5; padding: 10px 0px; }
     h1, h2, h3 { font-weight: 300 !important; color: #333333; }
     
-    /* 獎牌排行榜樣式 */
-    .rank-container {
-        display: flex;
-        justify-content: space-around;
-        padding: 20px 0;
-        margin: 10px 0;
+    /* 排行榜樣式：支援多行自動換行 */
+    .rank-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 20px;
+        padding: 10px 0;
     }
     .rank-card {
         text-align: center;
-        flex: 1;
+        padding: 15px;
+        border-radius: 12px;
+        background-color: #FDFDFD;
+        border: 1px solid #F0F0F0;
     }
-    .rank-title { font-size: 1.2rem; margin-bottom: 5px; color: #333; }
-    .rank-amount { font-size: 1.8rem; font-weight: 500; color: #4A90E2; }
+    .rank-title { font-size: 1.1rem; margin-bottom: 5px; color: #333; }
+    .rank-amount { font-size: 1.5rem; font-weight: 500; color: #4A90E2; }
     .rank-label { 
         background-color: #E8F0FE; 
         padding: 5px 15px; 
         border-radius: 20px; 
         display: inline-block;
-        margin-bottom: 15px;
+        margin-bottom: 20px;
         font-weight: 500;
+        color: #333;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -103,53 +107,55 @@ if uploaded_file:
             total_sum = df[c_amt].sum()
             summary = df.groupby('類別')[c_amt].sum().sort_values(ascending=False).reset_index()
             
+            # 指標顯示
             col1, col2, col3 = st.columns(3)
             col1.metric("總支出", f"${total_sum:,.0f}")
             col2.metric("最大開銷", summary.iloc[0]['類別'] if not summary.empty else "-")
             col3.metric("紀錄比數", f"{len(df)} 筆")
 
-            # --- 🏆 獎牌排行榜 (取代圖表) ---
-            st.markdown("<br><div class='rank-label'>🏆 消費排行榜</div>", unsafe_allow_html=True)
+            # --- 🏆 全量消費排行榜 (包含所有類別) ---
+            st.markdown("<br><div class='rank-label'>🏆 全類別消費排行榜</div>", unsafe_allow_html=True)
             
-            # 準備前三名資料
-            ranks = []
-            medals = ["🥇", "🥈", "🥉"]
-            for i in range(3):
-                if i < len(summary):
-                    ranks.append({"medal": medals[i], "cat": summary.iloc[i]['類別'], "amt": summary.iloc[i][c_amt]})
-                else:
-                    ranks.append({"medal": medals[i], "cat": "-", "amt": 0})
+            # 動態生成排行榜卡片
+            rank_html = "<div class='rank-grid'>"
+            for i, row in summary.iterrows():
+                # 前三名給獎牌，之後給序號
+                if i == 0: icon = "🥇"
+                elif i == 1: icon = "🥈"
+                elif i == 2: icon = "🥉"
+                else: icon = f"#{i+1}"
+                
+                rank_html += f"""
+                <div class='rank-card'>
+                    <div class='rank-title'>{icon} {row['類別']}</div>
+                    <div class='rank-amount'>{int(row[c_amt]):,}元</div>
+                </div>
+                """
+            rank_html += "</div>"
+            st.markdown(rank_html, unsafe_allow_html=True)
 
-            # 顯示獎牌卡片
-            r_col1, r_col2, r_col3 = st.columns(3)
-            with r_col1:
-                st.markdown(f"<div class='rank-card'><div class='rank-title'>{ranks[0]['medal']} {ranks[0]['cat']}</div><div class='rank-amount'>{int(ranks[0]['amt'])}元</div></div>", unsafe_allow_html=True)
-            with r_col2:
-                st.markdown(f"<div class='rank-card'><div class='rank-title'>{ranks[1]['medal']} {ranks[1]['cat']}</div><div class='rank-amount'>{int(ranks[1]['amt'])}元</div></div>", unsafe_allow_html=True)
-            with r_col3:
-                st.markdown(f"<div class='rank-card'><div class='rank-title'>{ranks[2]['medal']} {ranks[2]['cat']}</div><div class='rank-amount'>{int(ranks[2]['amt'])}元</div></div>", unsafe_allow_html=True)
-
-            # --- 其他分析圖表 ---
+            # --- 分析圖表 (僅保留圓餅圖) ---
             st.divider()
-            c_left, c_right = st.columns(2)
-            with c_left:
-                st.markdown("### 🥧 支出佔比")
-                st.plotly_chart(px.pie(summary, values=c_amt, names='類別', hole=0.7, color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
-            with c_right:
-                st.markdown("### 📈 消費趨勢")
-                if c_date:
-                    trend = df.groupby(c_date)[c_amt].sum().reset_index()
-                    st.plotly_chart(px.line(trend, x=c_date, y=c_amt, markers=True, color_discrete_sequence=['#4A90E2']).update_layout(plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
+            st.markdown("### 🥧 支出佔比分析")
+            fig_pie = px.pie(summary, values=c_amt, names='類別', hole=0.7, 
+                             color_discrete_sequence=px.colors.qualitative.Pastel)
+            fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20), showlegend=True)
+            st.plotly_chart(fig_pie, use_container_width=True)
 
-            # --- 明細管理區 (保留功能) ---
+            # --- 明細管理區 (核心編輯功能) ---
             st.divider()
             st.markdown("### 🔍 明細管理與類別修正")
             st.data_editor(
                 df[[c_date, c_desc, c_amt, '類別']],
-                column_config={"類別": st.column_config.SelectboxColumn("分類修正", options=list(st.session_state.category_rules.keys()) + ["待分類"]), c_amt: st.column_config.NumberColumn("金額", format="$%d")},
-                use_container_width=True, hide_index=True, height=400
+                column_config={
+                    "類別": st.column_config.SelectboxColumn("分類修正", options=list(st.session_state.category_rules.keys()) + ["待分類"]), 
+                    c_amt: st.column_config.NumberColumn("金額", format="$%d")
+                },
+                use_container_width=True, hide_index=True, height=500
             )
-            st.download_button("📤 匯出報表", df.to_csv(index=False).encode('utf-8-sig'), "report.csv", "text/csv")
+            
+            # 匯出按鈕
+            st.download_button("📤 匯出修正後報表", df.to_csv(index=False).encode('utf-8-sig'), "richart_report.csv", "text/csv")
 
     except Exception as e:
-        st.error(f"錯誤: {e}")
+        st.error(f"系統錯誤: {e}")
