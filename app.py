@@ -10,33 +10,20 @@ import time
 # --- 1. 頁面設定 ---
 st.set_page_config(page_title="Richart AI Pro", page_icon="💰", layout="wide")
 
-# --- 2. 質感 CSS (徹底解決按鈕過大) ---
+# --- 2. CSS ---
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF; }
-    /* 自定義小卡片樣式 */
-    .ranking-card {
+    .stButton>button {
+        border-radius: 10px;
+        min-height: 60px;
         background: #F8F9FA;
         border: 1px solid #E0E0E0;
-        border-radius: 12px;
-        padding: 15px;
-        text-align: center;
-        transition: 0.3s;
-        cursor: pointer;
-        margin-bottom: 10px;
     }
-    .ranking-card:hover {
-        border-color: #4A90E2;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        background: #FFFFFF;
-    }
-    .ranking-icon { font-size: 1.5rem; }
-    .ranking-name { font-size: 1rem; color: #555; font-weight: bold; }
-    .ranking-price { font-size: 1.2rem; color: #4A90E2; font-weight: 800; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 初始化連線 ---
+# --- 3. 連線與規則讀取 ---
 @st.cache_resource
 def get_gc():
     try:
@@ -49,29 +36,54 @@ gc = get_gc()
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_rules():
+    """強化版規則讀取：增加詳細錯誤回報"""
     try:
-        rules_df = conn.read(worksheet="Sheet1", ttl="0s")
-        rules_df.columns = [c.strip() for c in rules_df.columns]
-        opts = sorted([str(c).strip() for c in rules_df['分類名稱'].dropna().unique() if str(c).strip() != 'nan'])
-        rules_dict = {str(r['分類名稱']).strip(): [k.strip().lower() for k in str(r['關鍵字']).split(",") if k.strip()] 
-                      for _, r in rules_df.iterrows() if str(r['分類名稱']).strip() != 'nan'}
-        return opts, rules_dict
-    except: return [], {}
+        # ttl=0 確保每次都抓最新的，避免被 Cache 誤導
+        df = conn.read(worksheet="Sheet1", ttl="0s")
+        if df.empty:
+            st.error("❌ Sheet1 是空的，請檢查試算表內容！")
+            return [], {}
+        
+        # 清除欄位空格
+        df.columns = [str(c).strip() for c in df.columns]
+        
+        if "分類名稱" not in df.columns or "關鍵字" not in df.columns:
+            st.error(f"❌ 欄位名稱不符！目前抓到的是: {list(df.columns)}。請確保有『分類名稱』與『關鍵字』。")
+            return [], {}
 
-# 載入規則至 session_state
-if 'opts' not in st.session_state:
+        opts = sorted([str(c).strip() for c in df['分類名稱'].dropna().unique() if str(c).strip() != 'nan'])
+        rules_dict = {
+            str(r['分類名稱']).strip(): [k.strip().lower() for k in str(r['關鍵字']).split(",") if k.strip()] 
+            for _, r in df.iterrows() if str(r['分類名稱']).strip() != 'nan'
+        }
+        return opts, rules_dict
+    except Exception as e:
+        st.error(f"❌ 讀取 Sheet1 失敗: {e}")
+        return [], {}
+
+# 初始化 Session State
+if 'opts' not in st.session_state or not st.session_state.opts:
     st.session_state.opts, st.session_state.rules = load_rules()
 
 # --- 4. 側邊欄 ---
 with st.sidebar:
     st.header("⚙️ 控制面板")
     target_month = st.text_input("分析月份 (YYYYMM)", value=datetime.now().strftime("%Y%m"))
-    if st.button("🔄 同步雲端規則"):
+    
+    st.divider()
+    if st.button("🔄 強制同步雲端規則"):
+        st.cache_resource.clear() # 清除連線快取
         st.session_state.opts, st.session_state.rules = load_rules()
-        st.success("規則已同步！")
+        st.success("規則已重新載入！")
         st.rerun()
+    
+    with st.expander("🛠️ 目前抓取到的規則"):
+        if st.session_state.rules:
+            st.write(st.session_state.rules)
+        else:
+            st.warning("⚠️ 目前沒有抓到任何規則！")
 
-# --- 5. 明細對話框 ---
+# --- 5. 對話框與主邏輯 ---
 @st.dialog("📋 消費明細查看", width="large")
 def show_details(cat, data):
     st.subheader(f"類別：{cat}")
@@ -79,12 +91,11 @@ def show_details(cat, data):
     st.dataframe(detail_df, use_container_width=True, hide_index=True)
     st.metric("該類別總計", f"${int(detail_df['金額'].sum()):,}")
 
-# --- 6. 核心數據邏輯 ---
 if gc:
     try:
         sh = gc.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
         
-        # 讀取資料
+        # 讀取當月資料
         try:
             df_m = conn.read(worksheet=target_month, ttl="0s")
             if not df_m.empty:
@@ -96,16 +107,20 @@ if gc:
 
         st.title(f"📊 {target_month} 財務儀表板")
 
-        # 初始化上傳
+        # --- 資料初始化與自動分類 ---
         if 'working_df' not in st.session_state:
-            st.info("💡 請上傳 Excel 初始化。")
-            u_file = st.file_uploader("📥 上傳 Excel", type=["xlsx"])
+            st.info("💡 請上傳 Excel 開始分析。")
+            u_file = st.file_uploader("📥 上傳 Richart Excel", type=["xlsx"])
             if u_file:
-                df = pd.read_excel(u_file, header=next(i for i, r in pd.read_excel(u_file, header=None).iterrows() if "消費明細" in "".join(map(str, r))))
+                # 這裡增加自動分類邏輯
+                raw = pd.read_excel(u_file, header=None)
+                h_idx = next(i for i, r in raw.iterrows() if "消費明細" in "".join(map(str, r)))
+                df = pd.read_excel(u_file, header=h_idx)
                 df.columns = [str(c).strip() for c in df.columns]
                 c_d, c_m, c_a = next(c for c in df.columns if "日期" in c), next(c for c in df.columns if "明細" in c), next(c for c in df.columns if "金額" in c)
                 
                 def classify(t):
+                    # 如果規則是空的，這裡會全部回傳待分類
                     for cat, kws in st.session_state.rules.items():
                         if any(k in str(t).lower() for k in kws): return cat
                     return "待分類"
@@ -121,46 +136,41 @@ if gc:
                 st.session_state.working_df = new_df
                 st.rerun()
 
-        # 數據展示
+        # --- 頁面展示區 ---
         if 'working_df' in st.session_state:
             w_df = st.session_state.working_df
             sum_df = w_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
 
-            # --- 🏆 排行榜 (使用 Column 排版縮小按鈕) ---
-            st.subheader("🏆 支出排行 (點擊看明細)")
-            # 限制按鈕不要太寬
-            cols = st.columns(6) 
+            # 1. 排行榜 (縮小版)
+            st.subheader("🏆 支出排行")
+            cols = st.columns(6)
             for i, row in sum_df.iterrows():
                 with cols[i % 6]:
-                    rank_icon = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else "💰"
-                    # 使用小字號標題模擬縮小按鈕
-                    if st.button(f"{rank_icon}{row['類別']}\n${int(row['金額']):,}", key=f"r_{row['類別']}", use_container_width=True):
+                    if st.button(f"{row['類別']}\n${int(row['金額']):,}", key=f"r_{row['類別']}", use_container_width=True):
                         show_details(row['類別'], w_df)
 
-            # --- 🥧 圓餅圖 (置中，單獨一行) ---
+            # 2. 圓餅圖 (置中獨佔一行)
             st.divider()
             st.subheader("🥧 支出比例分析")
             fig = px.pie(sum_df, values='金額', names='類別', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
-            fig.update_layout(height=500, margin=dict(t=30, b=30, l=0, r=0))
+            fig.update_layout(height=500)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- 🔍 明細編輯 (單獨一行) ---
+            # 3. 明細管理 (獨佔一行)
             st.divider()
             st.subheader("🔍 明細管理與類別修正")
-            
-            # 使用副本進行編輯
             opts = sorted(list(set(st.session_state.opts + ["待分類"])))
+            
             edited_df = st.data_editor(
                 w_df,
                 column_config={"類別": st.column_config.SelectboxColumn("分類修正", options=opts, width="medium")},
                 use_container_width=True, hide_index=True, key="main_editor"
             )
 
-            if st.button("💾 儲存所有變動至雲端"):
-                # 直接將編輯後的表格儲存
-                st.session_state.working_df = edited_df
+            if st.button("💾 儲存並同步至雲端"):
                 conn.update(worksheet=target_month, data=edited_df)
-                st.success("✅ 雲端同步完成！")
+                st.session_state.working_df = edited_df
+                st.success("✅ 雲端已同步！")
                 time.sleep(1)
                 st.rerun()
 
