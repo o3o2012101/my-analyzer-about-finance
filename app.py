@@ -7,7 +7,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- 1. 頁面設定 ---
-st.set_page_config(page_title="Richart AI 全自動帳本", page_icon="💰", layout="wide")
+st.set_page_config(page_title="個人月消費分析系統", page_icon="💰", layout="wide")
 
 # --- 2. 核心 CSS 修復 ---
 st.markdown("""
@@ -99,7 +99,7 @@ def show_detail(cat, data):
     st.dataframe(d[['日期', '消費明細', '金額']], use_container_width=True, hide_index=True)
 
 # --- 7. 主頁面流程 ---
-st.title("🤖 Richart AI 自動記帳系統")
+st.title("📊 個人月消費分析系統")
 
 if 'working_df' not in st.session_state:
     u_file = st.file_uploader("📥 第一步：上傳 Richart Excel 明細", type=["xlsx"])
