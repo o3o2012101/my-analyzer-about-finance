@@ -21,7 +21,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 初始化 gspread (用於自動建分頁) ---
+# --- 2. 初始化 gspread ---
 @st.cache_resource
 def get_gspread_client():
     creds_info = st.secrets["connections"]["gsheets"]
@@ -29,36 +29,57 @@ def get_gspread_client():
     credentials = Credentials.from_service_account_info(creds_info, scopes=scope)
     return gspread.authorize(credentials)
 
-try:
-    gc = get_gspread_client()
-    sh = gc.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
-except Exception as e:
-    st.error(f"連線至 Google Sheets 失敗，請檢查 Secret 設定：{e}")
+gc = get_gspread_client()
+sh = gc.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
-# --- 3. 讀取規則 (Sheet1) ---
+# --- 3. 穩定讀取規則 (Sheet1) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def load_rules():
+def fetch_category_list():
+    """強制獲取所有分類名稱清單，確保下拉選單不留白"""
     try:
-        rules_df = conn.read(worksheet="Sheet1", ttl="1s")
+        rules_df = conn.read(worksheet="Sheet1", ttl="0s") # 禁用快取確保即時
         rules_df.columns = [c.strip() for c in rules_df.columns]
-        rules_dict = {str(row['分類名稱']).strip(): [k.strip().lower() for k in str(row['關鍵字']).split(",") if k.strip()] 
-                      for _, row in rules_df.iterrows() if str(row['分類名稱']).strip() != 'nan'}
-        return rules_dict
+        # 過濾掉空的分類
+        cats = rules_df['分類名稱'].dropna().unique().tolist()
+        return [str(c).strip() for c in cats if str(c).strip() != 'nan']
+    except:
+        return []
+
+def load_rules_dict():
+    """載入規則字典供自動分類使用"""
+    try:
+        rules_df = conn.read(worksheet="Sheet1", ttl="0s")
+        rules_df.columns = [c.strip() for c in rules_df.columns]
+        return {str(row['分類名稱']).strip(): [k.strip().lower() for k in str(row['關鍵字']).split(",") if k.strip()] 
+                for _, row in rules_df.iterrows() if str(row['分類名稱']).strip() != 'nan'}
     except: return {}
 
-category_rules = load_rules()
+# 將分類清單存在 session 中防止遺失
+if 'category_options' not in st.session_state or not st.session_state.category_options:
+    st.session_state.category_options = fetch_category_list()
 
-# --- 4. 側邊欄與月份管理 ---
+if 'category_rules' not in st.session_state:
+    st.session_state.category_rules = load_rules_dict()
+
+# --- 4. 側邊欄 ---
 with st.sidebar:
     st.title("📂 月份切換")
     target_month = st.text_input("操作月份 (YYYYMM)", value=datetime.now().strftime("%Y%m"))
-    with st.expander("🛠️ 目前偵測到的分類規則"):
-        st.write(category_rules)
+    
+    st.divider()
+    if st.button("🔄 強制更新規則選單"):
+        st.session_state.category_options = fetch_category_list()
+        st.session_state.category_rules = load_rules_dict()
+        st.success("規則清單已重新載入！")
+        st.rerun()
+        
+    with st.expander("🛠️ 目前規則預覽"):
+        st.write(st.session_state.category_rules)
 
 st.title(f"📊 {target_month} 消費狀態分析")
 
-# --- 5. 讀取/建立分頁 ---
+# --- 5. 自動讀取/建立分頁 ---
 def get_or_create_worksheet(name):
     try: return sh.worksheet(name)
     except: return sh.add_worksheet(title=name, rows="1000", cols="20")
@@ -72,93 +93,3 @@ try:
 except:
     if 'working_df' in st.session_state and st.session_state.get('curr_m') != target_month:
         del st.session_state.working_df
-
-# 初始化上傳
-if 'working_df' not in st.session_state:
-    st.info("💡 雲端尚未有資料，請上傳 Richart Excel。")
-    uploaded_file = st.file_uploader("📥 上傳 Excel", type=["xlsx"])
-    if uploaded_file:
-        df_raw = pd.read_excel(uploaded_file, header=None)
-        h_idx = next(i for i, row in df_raw.iterrows() if "消費明細" in "".join(str(v) for v in row.values))
-        df = pd.read_excel(uploaded_file, header=h_idx)
-        df.columns = [str(c).strip() for c in df.columns]
-        c_desc, c_amt, c_date = next(c for c in df.columns if "明細" in c), next(c for c in df.columns if "金額" in c), next(c for c in df.columns if "日期" in c)
-        
-        def classify(text):
-            text = str(text).lower()
-            for cat, kws in category_rules.items():
-                if any(k in text for k in kws): return cat
-            return "待分類"
-            
-        df['類別'] = df[c_desc].apply(classify)
-        st.session_state.working_df = df[[c_date, c_desc, c_amt, '類別']].rename(columns={c_date:'日期', c_desc:'消費明細', c_amt:'金額'})
-        st.session_state.curr_m = target_month
-        get_or_create_worksheet(target_month)
-        conn.update(worksheet=target_month, data=st.session_state.working_df)
-        st.rerun()
-
-# --- 6. 核心功能區：篩選、編輯、儲存 ---
-if 'working_df' in st.session_state:
-    w_df = st.session_state.working_df
-
-    # 批次重新分類按鈕
-    if st.button("🚀 根據最新規則重新自動分類"):
-        def re_classify(t):
-            t = str(t).lower()
-            for cat, kws in category_rules.items():
-                if any(k in t for k in kws): return cat
-            return "待分類"
-        st.session_state.working_df['類別'] = st.session_state.working_df['消費明細'].apply(re_classify)
-        st.rerun()
-
-    # 📂 篩選功能
-    st.markdown("### 🔍 明細管理與修正")
-    all_cats = sorted(w_df['類別'].unique())
-    selected_cats = st.multiselect("📂 勾選欲查看的類別：", options=all_cats, default=all_cats)
-    
-    mask = w_df['類別'].isin(selected_cats)
-    filtered_df = w_df[mask]
-
-    # ✍️ 編輯功能
-    if not filtered_df.empty:
-        edited_df = st.data_editor(
-            filtered_df,
-            column_config={
-                "類別": st.column_config.SelectboxColumn("分類修正", options=list(category_rules.keys()) + ["待分類"]),
-                "金額": st.column_config.NumberColumn("金額", format="$%d")
-            },
-            use_container_width=True, hide_index=True, key="main_editor"
-        )
-
-        # 儲存連動
-        if st.session_state.main_editor.get("edited_rows"):
-            for row_idx_str, changes in st.session_state.main_editor["edited_rows"].items():
-                actual_idx = filtered_df.index[int(row_idx_str)]
-                for field, value in changes.items():
-                    st.session_state.working_df.at[actual_idx, field] = value
-            
-            if st.button("💾 確認修改並同步至雲端"):
-                conn.update(worksheet=target_month, data=st.session_state.working_df)
-                st.success("✅ 雲端同步成功！")
-                st.rerun()
-
-        # --- 7. 🏆 排行榜與圖表 (防禦空資料) ---
-        summary = filtered_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
-        total_val = summary['金額'].sum()
-
-        st.divider()
-        st.markdown("### 🏆 消費排行榜")
-        cols = st.columns(4)
-        for i, row in summary.iterrows():
-            with cols[i % 4]:
-                icon = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"#{i+1}"
-                st.markdown(f'<div class="rank-card"><div class="rank-name">{icon} {row["類別"]}</div><div class="rank-price">${int(row["金額"]):,}</div></div>', unsafe_allow_html=True)
-
-        st.divider()
-        st.markdown("### 🥧 支出佔比分析")
-        fig = px.pie(summary, values='金額', names='類別', hole=0.6, color_discrete_sequence=px.colors.qualitative.Pastel)
-        fig.update_traces(textposition='inside', textinfo='percent+label')
-        fig.add_annotation(text=f"總支出<br><b>${total_val:,.0f}</b>", showarrow=False, font=dict(size=22))
-        st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("請至少勾選一個類別來顯示資料與圖表。")
