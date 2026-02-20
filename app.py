@@ -5,9 +5,9 @@ import io
 import random
 
 # 1. 頁面基礎設定
-st.set_page_config(page_title="極簡帳務分析", page_icon="⚪", layout="wide")
+st.set_page_config(page_title="Richart AI 極簡理財報表", page_icon="⚪", layout="wide")
 
-# 自定義 CSS (極簡風)
+# 自定義 CSS (極簡質感風)
 st.markdown("""
     <style>
     .stApp { background-color: #FFFFFF; }
@@ -15,22 +15,42 @@ st.markdown("""
     .stButton>button { width: 100%; border-radius: 4px; border: 1px solid #E0E0E0; background-color: transparent; color: #444444; }
     div[data-testid="stMetric"] { border-bottom: 2px solid #F5F5F5; padding: 10px 0px; }
     h1, h2, h3 { font-weight: 300 !important; color: #333333; }
-    /* 讓表格顯示更清晰 */
-    .stDataEditor { border: 1px solid #f0f0f0; border-radius: 8px; }
+    
+    /* 獎牌排行榜樣式 */
+    .rank-container {
+        display: flex;
+        justify-content: space-around;
+        padding: 20px 0;
+        margin: 10px 0;
+    }
+    .rank-card {
+        text-align: center;
+        flex: 1;
+    }
+    .rank-title { font-size: 1.2rem; margin-bottom: 5px; color: #333; }
+    .rank-amount { font-size: 1.8rem; font-weight: 500; color: #4A90E2; }
+    .rank-label { 
+        background-color: #E8F0FE; 
+        padding: 5px 15px; 
+        border-radius: 20px; 
+        display: inline-block;
+        margin-bottom: 15px;
+        font-weight: 500;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 2. 雲端連結與同步邏輯 ---
 EDIT_URL = "https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/edit?gid=0#gid=0"
+SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/export?format=csv&gid=0"
 
 def load_rules_force():
-    sheet_url = f"https://docs.google.com/spreadsheets/d/1CoQxrsfhWDumhsbq_uQbUJVpzM9iDbBwhu16oUoRO_o/export?format=csv&gid=0&cache_buster={random.randint(1, 100000)}"
+    url = f"{SHEET_CSV_URL}&cache_buster={random.randint(1, 99999)}"
     try:
-        rules_df = pd.read_csv(sheet_url)
+        rules_df = pd.read_csv(url)
         rules_df.columns = [c.strip() for c in rules_df.columns]
-        rules_dict = {str(row['分類名稱']).strip(): [k.strip().lower() for k in str(row['關鍵字']).split(",") if k.strip()] 
-                      for _, row in rules_df.iterrows() if str(row['分類名稱']).strip() != 'nan'}
-        return rules_dict
+        return {str(row['分類名稱']).strip(): [k.strip().lower() for k in str(row['關鍵字']).split(",") if k.strip()] 
+                for _, row in rules_df.iterrows() if str(row['分類名稱']).strip() != 'nan'}
     except:
         return {"預設": []}
 
@@ -39,9 +59,9 @@ if 'category_rules' not in st.session_state:
 
 # --- 3. 側邊欄 ---
 with st.sidebar:
-    st.markdown("### ⚙️ 設定")
-    st.markdown(f"[📝 點我開啟雲端表格]({EDIT_URL})")
-    if st.button("🔄 強制同步雲端規則"):
+    st.markdown("### ⚙️ 設定中心")
+    st.markdown(f"[📝 打開雲端表格]({EDIT_URL})")
+    if st.button("🔄 同步規則"):
         st.cache_data.clear()
         st.session_state.category_rules = load_rules_force()
         st.success("同步成功！")
@@ -52,7 +72,7 @@ with st.sidebar:
 
 # --- 4. 主頁面內容 ---
 st.title("帳務分析報表")
-uploaded_file = st.file_uploader("", type=["xlsx"])
+uploaded_file = st.file_uploader("📥 上傳 Richart Excel", type=["xlsx"], label_visibility="collapsed")
 
 if uploaded_file:
     try:
@@ -65,15 +85,12 @@ if uploaded_file:
         
         df = pd.read_excel(uploaded_file, header=header_idx)
         df.columns = [str(c).strip() for c in df.columns]
-        
-        c_desc = next((c for c in df.columns if "明細" in c), None)
-        c_amt = next((c for c in df.columns if "金額" in c), None)
-        c_date = next((c for c in df.columns if "日期" in c), None)
+        c_desc, c_amt, c_date = next((c for c in df.columns if "明細" in c), None), next((c for c in df.columns if "金額" in c), None), next((c for c in df.columns if "日期" in c), None)
 
         if c_desc and c_amt:
             df[c_amt] = pd.to_numeric(df[c_amt], errors='coerce').fillna(0)
             df = df.dropna(subset=[c_desc])
-
+            
             # 自動分類
             def classify(t):
                 t = str(t).lower()
@@ -82,60 +99,57 @@ if uploaded_file:
                 return "待分類"
             df['類別'] = df[c_desc].apply(classify)
 
-            # --- 數據摘要卡片 ---
+            # 數據摘要
             total_sum = df[c_amt].sum()
-            summary_df = df.groupby('類別')[c_amt].sum().sort_values(ascending=False).reset_index()
+            summary = df.groupby('類別')[c_amt].sum().sort_values(ascending=False).reset_index()
             
-            c1, c2, c3 = st.columns(3)
-            c1.metric("總支出", f"${total_sum:,.0f}")
-            c2.metric("最大開銷", summary_df.iloc[0]['類別'] if not summary_df.empty else "-")
-            c3.metric("紀錄筆數", f"{len(df)} 筆")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("總支出", f"${total_sum:,.0f}")
+            col2.metric("最大開銷", summary.iloc[0]['類別'] if not summary.empty else "-")
+            col3.metric("紀錄比數", f"{len(df)} 筆")
 
-            # --- 視覺化圖表區 (左右平分) ---
-            st.markdown("<br>", unsafe_allow_html=True)
-            col_left, col_right = st.columns([1, 1])
+            # --- 🏆 獎牌排行榜 (取代圖表) ---
+            st.markdown("<br><div class='rank-label'>🏆 消費排行榜</div>", unsafe_allow_html=True)
             
-            with col_left:
-                st.markdown("### 📊 支出分佈")
-                fig_pie = px.pie(summary_df, values=c_amt, names='類別', hole=0.7, 
-                                 color_discrete_sequence=px.colors.qualitative.Pastel)
-                fig_pie.update_layout(margin=dict(t=0, b=0, l=0, r=0), showlegend=True)
-                st.plotly_chart(fig_pie, use_container_width=True)
+            # 準備前三名資料
+            ranks = []
+            medals = ["🥇", "🥈", "🥉"]
+            for i in range(3):
+                if i < len(summary):
+                    ranks.append({"medal": medals[i], "cat": summary.iloc[i]['類別'], "amt": summary.iloc[i][c_amt]})
+                else:
+                    ranks.append({"medal": medals[i], "cat": "-", "amt": 0})
 
-            with col_right:
-                st.markdown("### 🏆 消費排行")
-                fig_rank = px.bar(summary_df, x=c_amt, y='類別', orientation='h', 
-                                  color_discrete_sequence=['#555555'])
-                fig_rank.update_layout(yaxis={'categoryorder':'total ascending'}, 
-                                      plot_bgcolor='rgba(0,0,0,0)', margin=dict(t=0, b=0))
-                st.plotly_chart(fig_rank, use_container_width=True)
+            # 顯示獎牌卡片
+            r_col1, r_col2, r_col3 = st.columns(3)
+            with r_col1:
+                st.markdown(f"<div class='rank-card'><div class='rank-title'>{ranks[0]['medal']} {ranks[0]['cat']}</div><div class='rank-amount'>{int(ranks[0]['amt'])}元</div></div>", unsafe_allow_html=True)
+            with r_col2:
+                st.markdown(f"<div class='rank-card'><div class='rank-title'>{ranks[1]['medal']} {ranks[1]['cat']}</div><div class='rank-amount'>{int(ranks[1]['amt'])}元</div></div>", unsafe_allow_html=True)
+            with r_col3:
+                st.markdown(f"<div class='rank-card'><div class='rank-title'>{ranks[2]['medal']} {ranks[2]['cat']}</div><div class='rank-amount'>{int(ranks[2]['amt'])}元</div></div>", unsafe_allow_html=True)
 
-            # --- 關鍵區域：直接編輯表格 ---
+            # --- 其他分析圖表 ---
+            st.divider()
+            c_left, c_right = st.columns(2)
+            with c_left:
+                st.markdown("### 🥧 支出佔比")
+                st.plotly_chart(px.pie(summary, values=c_amt, names='類別', hole=0.7, color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
+            with c_right:
+                st.markdown("### 📈 消費趨勢")
+                if c_date:
+                    trend = df.groupby(c_date)[c_amt].sum().reset_index()
+                    st.plotly_chart(px.line(trend, x=c_date, y=c_amt, markers=True, color_discrete_sequence=['#4A90E2']).update_layout(plot_bgcolor='rgba(0,0,0,0)'), use_container_width=True)
+
+            # --- 明細管理區 (保留功能) ---
             st.divider()
             st.markdown("### 🔍 明細管理與類別修正")
-            st.caption("您可以直接在「類別」欄位下拉選單修正分類，修正結果可於下方匯出。")
-            
-            # 這裡就是你要的表格，直接放在主頁面最醒目的位置
             st.data_editor(
                 df[[c_date, c_desc, c_amt, '類別']],
-                column_config={
-                    "類別": st.column_config.SelectboxColumn(
-                        "分類修正", 
-                        options=list(st.session_state.category_rules.keys()) + ["待分類"],
-                        width="medium"
-                    ),
-                    c_amt: st.column_config.NumberColumn("金額", format="$%d"),
-                    c_desc: "消費明細",
-                    c_date: "日期"
-                },
-                use_container_width=True, 
-                hide_index=True,
-                height=500 # 固定高度方便捲動
+                column_config={"類別": st.column_config.SelectboxColumn("分類修正", options=list(st.session_state.category_rules.keys()) + ["待分類"]), c_amt: st.column_config.NumberColumn("金額", format="$%d")},
+                use_container_width=True, hide_index=True, height=400
             )
-            
-            # 匯出按鈕
-            csv = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📤 匯出修正後的報表 (CSV)", csv, "richart_report.csv", "text/csv")
+            st.download_button("📤 匯出報表", df.to_csv(index=False).encode('utf-8-sig'), "report.csv", "text/csv")
 
     except Exception as e:
-        st.error(f"解析錯誤: {e}")
+        st.error(f"錯誤: {e}")
