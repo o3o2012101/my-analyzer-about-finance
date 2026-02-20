@@ -19,9 +19,9 @@ st.markdown("""
         justify-content: flex-end;
     }
     
-    /* 排行榜按鈕樣式 */
+    /* 排行榜按鈕樣式 (兩行顯示) */
     .stButton > button {
-        height: 70px !important;
+        height: 75px !important;
         border-radius: 12px !important;
         border: 1px solid #E0E0E0 !important;
         background-color: #F8F9FB !important;
@@ -34,15 +34,10 @@ st.markdown("""
         height: 45px !important;
         font-weight: bold !important;
     }
-
-    /* 確保 Data Editor 的工具列（搜尋、下載、篩選）顯示出來 */
-    [data-testid="stElementToolbar"] {
-        display: flex !important;
-    }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 連線與規則載入 ---
+# --- 3. 初始化連線與規則載入 ---
 @st.cache_resource
 def get_gc():
     try:
@@ -122,30 +117,36 @@ if 'working_df' not in st.session_state:
 if 'working_df' in st.session_state:
     st.markdown("### 🔍 1. 明細管理與類別修正")
     
-    # 這裡加入搜尋與篩選的說明提示
-    st.caption("💡 點擊表格右上角的 🔍 符號可以搜尋關鍵字，點擊標題可以排序。")
+    # 【重要回歸：篩選功能】
+    all_current_cats = sorted(st.session_state.working_df['類別'].unique())
+    selected_cats = st.multiselect("📂 勾選欲查看的類別：", options=all_current_cats, default=all_current_cats)
     
-    if st.button("🤖 重新套用規則"):
+    # 建立過濾後的視圖
+    mask = st.session_state.working_df['類別'].isin(selected_cats)
+    filtered_df = st.session_state.working_df[mask]
+
+    if st.button("🤖 重新套用最新規則"):
         st.session_state.working_df = perform_auto_classify(st.session_state.working_df)
         st.rerun()
     
-    # 核心：啟用搜尋與下載功能的 data_editor
-    edited_df = st.data_editor(
-        st.session_state.working_df,
+    # 【重要回歸：編輯功能】
+    edited_display_df = st.data_editor(
+        filtered_df,
         column_config={
             "類別": st.column_config.SelectboxColumn("分類修正", options=st.session_state.opts + ["待分類"]),
             "金額": st.column_config.NumberColumn("金額", format="$%d")
         },
-        use_container_width=True, 
-        hide_index=True, 
-        key="main_editor",
-        num_rows="dynamic" # 允許動態操作
+        use_container_width=True, hide_index=True, key="main_editor"
     )
 
-    # (2) 排行榜
+    # 💡 重要：同步回原始 session_state，確保排行榜計算正確
+    st.session_state.working_df.update(edited_display_df)
+
+    # (2) 排行榜 (四個一列)
     st.divider()
-    st.markdown("### 🏆 2. 消費支出排行榜")
-    sum_df = edited_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
+    st.markdown("### 🏆 2. 消費支出排行榜 (點擊看明細)")
+    # 使用完整數據計算排行榜，不受篩選器影響
+    sum_df = st.session_state.working_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
     
     num_cols = 4
     for i in range(0, len(sum_df), num_cols):
@@ -156,15 +157,15 @@ if 'working_df' in st.session_state:
                 medal = "🥇 " if original_idx == 0 else "🥈 " if original_idx == 1 else "🥉 " if original_idx == 2 else ""
                 label_text = f"{medal}{row['類別']}\n$ {int(row['金額']):,}"
                 if st.button(label_text, key=f"r_{row['類別']}", use_container_width=True):
-                    show_detail(row['類別'], edited_df)
+                    show_detail(row['類別'], st.session_state.working_df)
 
     # (3) 圖表
     st.divider()
     st.markdown("### 🥧 3. 支出佔比分析")
-    fig = px.pie(sum_df, values='金額', names='類別', hole=0.5)
+    fig = px.pie(sum_df, values='金額', names='類別', hole=0.5, color_discrete_sequence=px.colors.qualitative.Pastel)
     st.plotly_chart(fig, use_container_width=True)
 
-    # (4) 儲存區
+    # (4) 儲存區 (絕對對齊)
     st.divider()
     st.markdown("### 💾 4. 命名並儲存至雲端")
     save_col_left, save_col_right = st.columns([4, 6])
@@ -176,9 +177,11 @@ if 'working_df' in st.session_state:
                 sh = gc.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
                 try: sh.worksheet(target_name)
                 except: sh.add_worksheet(title=target_name, rows="1000", cols="20")
-                conn.update(worksheet=target_name, data=edited_df)
-                st.success(f"✅ 已儲存至分頁：{target_name}")
+                # 儲存完整的 working_df (含修改後的內容)
+                conn.update(worksheet=target_name, data=st.session_state.working_df)
+                st.success(f"✅ 已成功儲存：{target_name}")
 
+    st.write("")
     if st.button("🗑️ 清空數據"):
         del st.session_state.working_df
         st.rerun()
