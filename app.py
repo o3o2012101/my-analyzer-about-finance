@@ -26,7 +26,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- 2. 初始化 gspread (全自動建表) ---
+# --- 2. 初始化 gspread (自動建表用) ---
 @st.cache_resource
 def get_gspread_client():
     creds_info = st.secrets["connections"]["gsheets"]
@@ -37,7 +37,7 @@ def get_gspread_client():
 gc = get_gspread_client()
 sh = gc.open_by_url(st.secrets["connections"]["gsheets"]["spreadsheet"])
 
-# --- 3. 讀取規則 ---
+# --- 3. 讀取規則 (Sheet1) ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 def load_rules():
@@ -59,17 +59,18 @@ category_rules = load_rules()
 with st.sidebar:
     st.title("📂 月份切換")
     target_month = st.text_input("操作月份 (如 202602)", value=datetime.now().strftime("%Y%m"))
+    st.divider()
     with st.expander("🛠️ 目前偵測到的分類規則"):
         st.write(category_rules)
 
-# --- 5. 核心邏輯 ---
+# --- 5. 核心邏輯：自動讀取或初始化 ---
 st.title(f"📊 {target_month} 消費狀態分析")
 
 def get_or_create_worksheet(name):
     try: return sh.worksheet(name)
     except: return sh.add_worksheet(title=name, rows="1000", cols="20")
 
-# 讀取雲端資料
+# 讀取雲端分頁資料
 try:
     df_month = conn.read(worksheet=target_month, ttl="0s")
     if not df_month.empty:
@@ -80,10 +81,10 @@ except:
     if 'working_df' in st.session_state and st.session_state.get('curr_m') != target_month:
         del st.session_state.working_df
 
-# 初始化上傳
+# 上傳流程
 if 'working_df' not in st.session_state:
-    st.info(f"✨ 雲端尚未有 {target_month} 資料。")
-    uploaded_file = st.file_uploader("📥 上傳 Excel", type=["xlsx"])
+    st.info(f"✨ 雲端尚未偵測到 {target_month} 分頁。")
+    uploaded_file = st.file_uploader("📥 上傳 Excel 初始化雲端資料", type=["xlsx"])
     if uploaded_file:
         df_raw = pd.read_excel(uploaded_file, header=None)
         h_idx = next(i for i, row in df_raw.iterrows() if "消費明細" in "".join(str(v) for v in row.values))
@@ -100,14 +101,15 @@ if 'working_df' not in st.session_state:
         df['類別'] = df[c_desc].apply(classify)
         st.session_state.working_df = df[[c_date, c_desc, c_amt, '類別']].rename(columns={c_date:'日期', c_desc:'消費明細', c_amt:'金額'})
         st.session_state.curr_m = target_month
-        get_or_create_worksheet(target_month)
+        get_or_create_worksheet(target_month) # 自動建分頁
         conn.update(worksheet=target_month, data=st.session_state.working_df)
         st.rerun()
 
-# --- 6. 數據呈現 ---
+# --- 6. 資料編輯與顯示 (關鍵：包含篩選與編輯選單) ---
 if 'working_df' in st.session_state:
     w_df = st.session_state.working_df
     
+    # 功能按鈕
     if st.button("🚀 根據最新規則重新自動分類"):
         def re_classify(t):
             t = str(t).lower()
@@ -117,24 +119,50 @@ if 'working_df' in st.session_state:
         st.session_state.working_df['類別'] = st.session_state.working_df['消費明細'].apply(re_classify)
         st.rerun()
 
-    # 數據編輯
-    st.data_editor(st.session_state.working_df, use_container_width=True, hide_index=True, key="main_editor")
+    # 【重要回歸：篩選功能】
+    st.markdown("### 🔍 明細管理與修正")
+    all_cats = sorted(w_df['類別'].unique())
+    selected_cats = st.multiselect("📂 勾選欲查看的類別：", options=all_cats, default=all_cats)
     
-    # 儲存連動
+    # 建立過濾後的視圖
+    mask = w_df['類別'].isin(selected_cats)
+    filtered_df = w_df[mask]
+
+    # 【重要回歸：編輯功能】
+    edited_df = st.data_editor(
+        filtered_df,
+        column_config={
+            "類別": st.column_config.SelectboxColumn(
+                "分類修正", 
+                options=list(category_rules.keys()) + ["待分類"],
+                help="直接從下拉選單修正類別"
+            ),
+            "金額": st.column_config.NumberColumn("金額", format="$%d")
+        },
+        use_container_width=True, 
+        hide_index=True, 
+        key="main_editor"
+    )
+
+    # 儲存變動
     if st.session_state.main_editor.get("edited_rows"):
-        for row_idx, changes in st.session_state.main_editor["edited_rows"].items():
-            for f, v in changes.items(): st.session_state.working_df.at[int(row_idx), f] = v
-        if st.button("💾 儲存修改至雲端"):
+        for row_idx_str, changes in st.session_state.main_editor["edited_rows"].items():
+            # 找到過濾後對應原始 DataFrame 的正確索引
+            actual_idx = filtered_df.index[int(row_idx_str)]
+            for field, value in changes.items():
+                st.session_state.working_df.at[actual_idx, field] = value
+        
+        if st.button("💾 確認修改並同步至雲端"):
             conn.update(worksheet=target_month, data=st.session_state.working_df)
-            st.success("✅ 儲存成功！")
+            st.success("✅ 雲端資料同步更新！")
             st.rerun()
 
-    # --- 關鍵：排行榜與統計 ---
+    # --- 7. 排行榜與圖表 ---
     summary = st.session_state.working_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
     total_val = summary['金額'].sum()
 
     st.divider()
-    st.markdown("### 🏆 消費排行榜 (由高到低)")
+    st.markdown("### 🏆 消費排行榜")
     cols = st.columns(4)
     for i, row in summary.iterrows():
         with cols[i % 4]:
