@@ -10,57 +10,66 @@ import time
 # --- 1. 頁面基礎設定 ---
 st.set_page_config(page_title="Richart AI 全自動帳本", page_icon="💰", layout="wide")
 
-# --- 2. 深度視覺優化 (包含源泉圓體與按鈕美化) ---
+# --- 2. 核心 CSS 修復：字體與按鈕對齊 ---
 st.markdown("""
     <style>
-    /* 引入源泉圓體 (使用類似風格的開源圓體) */
-    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+    /* 引入更接近源泉圓體的 Google 圓體字型 */
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@500;700&family=ZCOOL+KuaiLe&display=swap');
     
-    html, body, [class*="css"] {
-        font-family: 'Noto Sans TC', sans-serif; /* 預設使用 TC 圓體風格 */
+    /* 全域字體強制套用圓體風格 */
+    html, body, [class*="css"], .stMarkdown, p, button {
+        font-family: 'Noto Sans TC', sans-serif !important;
+        letter-spacing: 0.5px;
     }
 
-    /* 整體背景與標題 */
-    .stApp { background-color: #FFFFFF; }
-    h1, h2, h3 { color: #333333 !important; font-weight: 800 !important; }
+    /* 標題加重圓體感 */
+    h1, h2, h3 {
+        font-family: 'Noto Sans TC', sans-serif !important;
+        font-weight: 800 !important;
+        color: #31333F !important;
+    }
 
-    /* 排行榜卡片美化：縮小高度、強化顏色 */
-    .stButton>button {
+    /* --- 排行榜按鈕對齊修復 (強制 Grid) --- */
+    .ranking-container {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr); /* 嚴格 6 欄對齊 */
+        gap: 12px;
+        margin-bottom: 20px;
+    }
+
+    /* 覆蓋 Streamlit 預設按鈕樣式 */
+    .stButton > button {
+        width: 100% !important;
         border-radius: 12px !important;
-        min-height: 50px !important; /* 縮小按鈕高度 */
+        height: 65px !important; /* 固定高度防止行差 */
         background-color: #F0F4F8 !important;
         border: 1px solid #D1D9E6 !important;
-        color: #1A1A1A !important; /* 加深字體顏色 */
+        color: #1A1A1A !important;
         font-weight: 700 !important;
-        font-size: 15px !important;
-        transition: all 0.2s ease;
-    }
-    .stButton>button:hover {
-        border-color: #4A90E2 !important;
-        background-color: #E1E8F0 !important;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        line-height: 1.2 !important;
     }
 
-    /* 特別強化「儲存儲存」按鈕的對比度 */
-    div[data-testid="stFormSubmitButton"] > button, 
+    .stButton > button:hover {
+        border-color: #4A90E2 !important;
+        background-color: #EBF3FF !important;
+    }
+
+    /* 儲存按鈕顏色強化 */
     button[kind="primary"] {
-        background: #4A90E2 !important;
-        color: #FFFFFF !important; /* 確保字體是純白 */
-        border: none !important;
+        background-color: #4A90E2 !important;
+        color: white !important;
+        height: 50px !important;
     }
     
-    /* 修正按鈕內文字過淺的問題 */
-    .stButton p {
-        color: inherit !important;
-        font-weight: 700 !important;
-    }
-
-    /* 隱藏預設的 DataEditor 工具列以減少雜訊 */
-    [data-testid="stDataEditor"] { border: 1px solid #E0E0E0; border-radius: 10px; }
+    /* 隱藏 DataEditor 多餘空白 */
+    [data-testid="stDataEditor"] { border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
-# --- 3. 初始化連線與規則 ---
+# --- 3. 連線與規則加載 ---
 @st.cache_resource
 def get_gc():
     try:
@@ -99,18 +108,17 @@ def perform_auto_classify(df):
 
 # --- 5. 側邊欄 ---
 with st.sidebar:
-    st.header("📂 功能選單")
+    st.markdown("## 📂 功能選單")
     with st.expander("📝 規則狀態查詢", expanded=False):
         if st.session_state.opts:
             st.success(f"已讀取 {len(st.session_state.opts)} 個分類")
             if st.button("🔄 同步雲端規則"):
                 st.session_state.opts, st.session_state.rules = load_rules_from_cloud()
                 st.rerun()
-    
     st.divider()
-    st.subheader("🔎 歷史紀錄查詢")
-    search_month = st.text_input("輸入年份月份 (YYYYMM)")
-    if st.button("載入歷史明細"):
+    st.markdown("### 🔎 歷史紀錄查詢")
+    search_month = st.text_input("輸入年份月份 (YYYYMM)", key="search_input")
+    if st.button("載入歷史明細", key="load_hist"):
         try:
             old_df = conn.read(worksheet=search_month, ttl="0s")
             st.session_state.working_df = old_df
@@ -125,10 +133,10 @@ def show_detail_dialog(cat, data):
     st.dataframe(d[['日期', '消費明細', '金額']], use_container_width=True, hide_index=True)
     st.metric("該類別總額", f"${int(d['金額'].sum()):,}")
 
-# --- 7. 主程式 (嚴格執行 6 步流程) ---
-st.title("🤖 Richart AI 自動記帳系統")
+# --- 7. 主頁面流程 (嚴格 6 步驟) ---
+st.markdown("# 🤖 Richart AI 自動記帳系統")
 
-# Step 1: 上傳與自動分類
+# Step 1: 上傳
 if 'working_df' not in st.session_state:
     u_file = st.file_uploader("📥 上傳 Excel 明細開始分析", type=["xlsx"])
     if u_file:
@@ -139,16 +147,13 @@ if 'working_df' not in st.session_state:
         new_df = df.iloc[:, [0,1,2]].copy()
         new_df.columns = ['日期', '消費明細', '金額']
         new_df['日期'] = pd.to_datetime(new_df['日期']).dt.strftime('%Y-%m-%d')
-        # 自動分類
         st.session_state.working_df = perform_auto_classify(new_df)
         st.rerun()
 
-# Step 2~5: 編輯、即時圖表、排行榜
 if 'working_df' in st.session_state:
-    
-    # (1) 明細管理與類別修正
+    # (1) 明細管理 (Step 3 手動調整)
     st.markdown("### 🔍 1. 明細管理與類別修正")
-    if st.button("🤖 重新套用最新規則", key="reclassify_btn"):
+    if st.button("🤖 重新套用規則 (全表更新)", key="reclassify_btn"):
         st.session_state.working_df = perform_auto_classify(st.session_state.working_df)
         st.rerun()
     
@@ -156,36 +161,40 @@ if 'working_df' in st.session_state:
     edited_df = st.data_editor(
         st.session_state.working_df,
         column_config={"類別": st.column_config.SelectboxColumn("分類修正", options=all_opts, width="medium")},
-        use_container_width=True, hide_index=True, key="editor"
+        use_container_width=True, hide_index=True, key="main_editor"
     )
 
-    # 即時計算數據
+    # (Step 4 連動計算)
     current_sum_df = edited_df.groupby('類別')['金額'].sum().sort_values(ascending=False).reset_index()
 
     st.divider()
 
-    # (2) 消費排行榜 (縮小版按鈕)
+    # (2) 排行榜 (對齊修復版)
     st.markdown("### 🏆 2. 消費支出排行榜 (點擊看明細)")
-    cols = st.columns(6)
-    for i, row in current_sum_df.iterrows():
-        with cols[i % 6]:
-            # 按鈕內的文字強制加深
-            btn_label = f"{row['類別']}\n${int(row['金額']):,}"
-            if st.button(btn_label, key=f"r_{row['類別']}", use_container_width=True):
-                show_detail_dialog(row['類別'], edited_df)
+    
+    # 解決行差：使用固定欄位數，不足的補空位確保 Grid 完整
+    num_cols = 6
+    for i in range(0, len(current_sum_df), num_cols):
+        batch = current_sum_df.iloc[i:i+num_cols]
+        cols = st.columns(num_cols)
+        for idx, (_, row) in enumerate(batch.iterrows()):
+            with cols[idx]:
+                label = f"{row['類別']}\n${int(row['金額']):,}"
+                if st.button(label, key=f"rank_{row['類別']}", use_container_width=True):
+                    show_detail_dialog(row['類別'], edited_df)
 
     st.divider()
 
-    # (3) 支出比例分析 (圓餅圖)
-    st.markdown("### 🥧 3. 支出比例分析")
+    # (3) 圓餅圖
+    st.markdown("### 🥧 3. 支出佔比分析")
     fig = px.pie(current_sum_df, values='金額', names='類別', hole=0.5, 
                  color_discrete_sequence=px.colors.qualitative.Pastel)
-    fig.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=450)
+    fig.update_layout(margin=dict(t=20, b=20, l=0, r=0), height=450)
     st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 
-    # (4) 儲存至雲端 (修正按鈕字體淺的問題)
+    # (4) 命名與匯入 (Step 5)
     st.markdown("### 💾 4. 命名並儲存至雲端")
     s_col1, s_col2 = st.columns([3, 7])
     with s_col1:
@@ -199,8 +208,8 @@ if 'working_df' in st.session_state:
                 try: sh.worksheet(target_name)
                 except: sh.add_worksheet(title=target_name, rows="1000", cols="20")
                 conn.update(worksheet=target_name, data=edited_df)
-                st.success(f"✅ 已成功儲存：{target_name}")
+                st.success(f"✅ 已儲存至分頁：{target_name}")
 
-    if st.button("🗑️ 清空並重新上傳"):
+    if st.button("🗑️ 清空數據"):
         del st.session_state.working_df
         st.rerun()
